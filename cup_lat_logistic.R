@@ -34,3 +34,4 @@ print("Lattice 1:")
 print(lattice1)
 print("Lattice 2:")
 print(lattice2)
+
