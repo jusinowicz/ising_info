@@ -1,73 +1,80 @@
-#Simple function to get h_it for each site at a single time step
-sum_hit1D = function (S_it){
-  N = max( dim(S_it)[1], dim(S_it)[2] ) #Size of lattice
-  kernel1D = c(1,1) #Nearest-neighbor kernel
-  
-  #Use a convolution to get the sum efficiently
-  conv_result = convolve(S_it, kernel1D, 
-                  type = "filter", boundary = "wrap")
+#This is a negative log likelihood function for the 1D Ising model
+#with memory. 
 
-
-  return(conv_result)
-
-}
-
-# #Not tested yet! 
-# sum_hit2D = function (S_it){
-
-#   N1 = dim(S_it)[1] 
-#   N2 = dim(S_it)[2] #Size of lattice
-#   kernel2D = matrix(c(1,1,1,1), nrow=2, byrow =T) #Nearest-neighbor kernel
-  
-#   #Use a convolution to get the sum efficiently
-#   conv_result = conv2(S_it, kernel2D, 
-#                   boundary = "wrap", conj = FALSE)
-
-
-#   return(conv_result)
-# }
-
-# Define the log-likelihood function based on Eq. (A9)
-log_likelihood = function(params, nk, nkf) {
-  # Extract parameters J and K
+negative_log_likelihood_transition = function(params, S_t, S_t1) {
   J = params[1]
   K = params[2]
   
-  # Calculate Pf(k) for each bin
-  Pf_k = ising1(J, K, nk)
+  log_likelihood = 0
+  S_t = t(S_t)
+  S_t1 = t(S_t1)
+
+  n_cols = ncol(S_t)
+
+  i = 1
+  for (j in 1:n_cols) {
+
+    # Get the indices of the nearest neighbors (assuming periodic boundary conditions)
+    neighbors_i = c( i, i)
+    neighbors_j = c(j - 1, j + 1)
+    neighbors_j = ifelse(neighbors_j < 1, n_cols, neighbors_j)
+    neighbors_j = ifelse(neighbors_j > n_cols, 1, neighbors_j)
+    
+    # Extract the spins of the neighbors
+    neighbors = S_t[ cbind(neighbors_i, neighbors_j) ]
+    
+    # Compute the effective field
+    h_eff = K * S_t[i,j] + J * sum( neighbors )
   
-  # Calculate the log-likelihood based on Eq. (A9)
-  log_likelihood_value = sum(nkf * log(Pf_k) + (nk - nkf) * log(1 - Pf_k))
+    #Probability of flipping the spin
+    pft = exp(h_eff*(-S_t[i,j]) ) / (2*cosh(h_eff))
+    
+    # Ensure that probabilities are finite
+    pft  = ifelse(is.finite(pft), pft, 1e-10)
+    #pft  = ifelse(pft  > 0, pft, 1e-10)
+    
+    #print(c(j,pft))
+    #Log probability of whether it flipped or not: 
+    log_pft = log(ifelse( S_t1[i,j] == S_t[i,j] , 1-pft, pft))
+    log_likelihood = log_likelihood + log_pft
+ 
+  }
   
-  return(log_likelihood_value)
+  return(-log_likelihood)  # return the negative log-likelihood for minimization
 }
 
-# Define a function to calculate Pf(k) based on parameters J and K
-ising1 = function(J, K, nk) {
-  # Calculate Pf(k) based on parameters J and K
-  Pf_k = exp(J * h_it + K * S_it) * S_it / (2 * cosh(J * h_it + K * S_it))
-  
-  return(Pf_k)
+
+#This function iterates the parameter inference over every subsequent pair
+#of time steps. It is a wrapper for nlm.
+fit_params_nlm = function( initial_params, final_grid ){
+
+  # Iterate over adjacent time steps and perform optimization for each pair
+  num_pairs =nrow(final_grid) - 1
+  parameter_estimates = matrix(NA, nrow = num_pairs, ncol = 2)
+  parameter_covariances = matrix(NA, nrow = num_pairs, ncol = 2)
+
+  for (t in 1:num_pairs) {
+    # Extract spin configurations for the current pair of time steps
+    S_t = final_grid[t, ]
+    S_t1 = final_grid[(t+1), ]
+
+    #Run nlm to get the result
+    result = nlm(f = negative_log_likelihood_transition, p = initial_params, 
+                  S_t =S_t, S_t1 = S_t1, hessian=TRUE)
+
+    # Store parameter estimates
+    parameter_estimates[t, ] = result$estimate
+   
+   # Compute covariance matrix from Hessian matrix
+    if(sum(result$hessian)>0){
+      # Compute standard errors from covariance matrices
+      parameter_covariances[t, ] = sqrt(diag(solve(result$hessian)))  
+    }
+  }
+
+  parm_output = NULL
+  parm_output$estimate = parameter_estimates
+  parm_output$cov = parameter_covariances
+
+  return(parm_output)
 }
-
-
-# Perform optimization to maximize the log-likelihood
-# Example optimization function: optim()
-# Example usage:
-# optim(par = c(initial_guess_J, initial_guess_K), fn = log_likelihood, nk = nk_values, nk_f = nk_f_values)
-
-# After optimization, you'll get the inferred parameters J and K
-# Additionally, you can calculate the error bars using the bootstrap method
-# Example code for bootstrap method:
-# bootstrapped_params = function(data, num_iterations) {
-#   sampled_params = replicate(num_iterations, {
-#     sampled_data = sample(data, replace = TRUE)
-#     # Perform optimization on sampled data
-#     optim(par = c(initial_guess_J, initial_guess_K), fn = log_likelihood, nk = nk_values_sampled, nk_f = nk_f_values_sampled)$par
-#   })
-#   return(sampled_params)
-# }
-# bootstrapped_params = bootstrapped_params(data = nk_data, num_iterations = 100)
-# Calculate error bars based on bootstrapped parameters
-
-# Finally, plot the inferred results, possibly including error bars
